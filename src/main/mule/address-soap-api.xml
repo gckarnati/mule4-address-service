@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<mule xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:secure-properties="http://www.mulesoft.org/schema/mule/secure-properties" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:apikit-soap="http://www.mulesoft.org/schema/mule/apikit-soap" xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd http://www.mulesoft.org/schema/mule/apikit-soap http://www.mulesoft.org/schema/mule/apikit-soap/current/mule-apikit-soap.xsd http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/secure-properties http://www.mulesoft.org/schema/mule/secure-properties/current/mule-secure-properties.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd">
+    <http:listener-config name="api-httpListenerConfig">
+        <http:listener-connection host="${secure::http.host}" port="${secure::http.port}"/>
+    </http:listener-config>
+    <apikit-soap:config name="soapkit-config" port="AddressServicePort" service="QuintrixAddressService" wsdlLocation="Quintrix_Address_Service.wsdl"/>
+    <db:config name="Database_Config" doc:name="Database Config" >
+		<db:my-sql-connection host="${secure::db.host}" port="${secure::db.port}" user="${secure::db.user}" password="${secure::db.password}" database="${secure::db.database}" />
+	</db:config>
+	<secure-properties:config name="Secure_Properties_Config" doc:name="Secure Properties Config" file="address-${env}.yaml" key="${key}" >
+		<secure-properties:encrypt algorithm="Blowfish" />
+	</secure-properties:config>
+	<flow name="api-main">
+        <http:listener config-ref="api-httpListenerConfig" path="/QuintrixAddressService">
+            <http:response statusCode="#[vars.httpStatus default 200]">
+            </http:response>
+            <http:error-response statusCode="#[vars.httpStatus default 500]">
+                <http:body><![CDATA[#[payload]]]></http:body>
+            </http:error-response>
+        </http:listener>
+        <apikit-soap:router config-ref="soapkit-config">
+            <apikit-soap:message>#[payload]</apikit-soap:message>
+            <apikit-soap:attributes>#[
+              %dw 2.0
+              output application/java
+              ---
+              {
+                  headers: attributes.headers,
+                  method: attributes.method,
+                  queryString: attributes.queryString
+            }]</apikit-soap:attributes>
+        </apikit-soap:router>
+		
+    </flow>
+    <flow name="getCustomerAddress:\soapkit-config">
+		<db:select doc:name="Select Address " doc:id="81f8e3a7-a78d-4c78-8662-f584830be591" config-ref="Database_Config">
+			<db:sql >select * from training.address where caustomerId = :customerId;</db:sql>
+			<db:input-parameters ><![CDATA[#[{
+customerId : payload.body.GetAddressRequest.customerId
+}]]]></db:input-parameters>
+		</db:select>
+		<ee:transform doc:id="a504691e-917c-4037-a2f9-e97b4f60d2af">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/java
+ns quin http://quintrix.com/QuintrixAddressService
+---
+{
+    body: {
+        quin#GetAddressResponse: {
+            customerId: payload.customerId,
+            address1: payload.address,
+            address2: payload.address2,
+            city : payload.city,
+         //   stateOrProvince: $.postal_code,
+            postalCode :payload.postal_code,
+            country : payload.country,
+            phone : payload.phone
+        }
+    } write "application/xml"
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+        <error-handler >
+			<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue" doc:id="29f8d977-5076-4f6c-a72d-8a37bab77e58">
+				<ee:transform doc:name="Transform Message" doc:id="d94d902a-aa86-4e25-b942-4c33bfbcc692">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/java
+ns soap http://schemas.xmlsoap.org/soap/envelope
+---
+{
+    body: {
+        soap#Fault: {
+            faultcode: error.errorType.namespace ++ ":" ++  error.errorType.identifier,
+            faultstring: error.description
+        }
+    } write "application/xml"
+}]]></ee:set-payload>
+					</ee:message>
+					<ee:variables>
+						<ee:set-variable variableName="http.status" ><![CDATA[%dw 2.0
+output application/java
+---
+500]]></ee:set-variable>
+					</ee:variables>
+				</ee:transform>
+			</on-error-continue>
+		</error-handler>
+    </flow>
+</mule>
